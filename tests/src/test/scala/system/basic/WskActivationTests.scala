@@ -56,8 +56,13 @@ class WskActivationTests extends TestHelpers with WskTestHelpers with WskActorSy
     (wp, assetHelper) =>
       val packageName = "shared-package"
       val actionName = "echo"
+<<<<<<< HEAD
       var invocationNamespace = if (wskprops.namespace == "_") "guest" else wskprops.namespace
       val packageActionName = s"/${invocationNamespace}/${packageName}/${actionName}"
+=======
+      var invocationNamesapce = if (wskprops.namespace == "_") "guest" else wskprops.namespace
+      val packageActionName = s"/${invocationNamesapce}/${packageName}/${actionName}"
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
 
       assetHelper.withCleaner(wsk.pkg, packageName) { (pkg, _) =>
         pkg.create(packageName, shared = Some(true))(wp)
@@ -68,15 +73,26 @@ class WskActivationTests extends TestHelpers with WskTestHelpers with WskActorSy
       }
 
       withActivation(wsk.activation, wsk.action.invoke(packageActionName)(wp)) { activation =>
+<<<<<<< HEAD
         activation.namespace shouldBe invocationNamespace
+=======
+        activation.namespace shouldBe invocationNamesapce
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
       }(wp)
 
       val systemId = "whisk.system"
       val wskprops2 = WskProps(authKey = WskAdmin.listKeys(systemId)(0)._1, namespace = systemId)
+<<<<<<< HEAD
       invocationNamespace = if (wskprops2.namespace == "_") "guest" else wskprops2.namespace
 
       withActivation(wsk.activation, wsk.action.invoke(packageActionName)(wskprops2)) { activation =>
         activation.namespace shouldBe invocationNamespace
+=======
+      invocationNamesapce = if (wskprops2.namespace == "_") "guest" else wskprops2.namespace
+
+      withActivation(wsk.activation, wsk.action.invoke(packageActionName)(wskprops2)) { activation =>
+        activation.namespace shouldBe invocationNamesapce
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
       }(wskprops2)
   }
 }

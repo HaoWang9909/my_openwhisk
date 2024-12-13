@@ -61,3 +61,13 @@ else
     echo "--- WARNING -------------------------------------------------"
     /bin/bash "$SCRIPTDIR/docker-xenial.sh"
 fi
+<<<<<<< HEAD
+=======
+
+
+
+sudo groupadd docker
+sudo usermod -aG docker $USER		#$USER是系统变量，直接使用该语句即可
+newgrp docker
+
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)

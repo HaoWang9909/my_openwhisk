@@ -901,7 +901,11 @@ function replaceNamespaceInUrl(url, namespace) {
  *        body: JSON object or JSON string
  *     }
  * Otherwise, the action was invoked as a regular OpenWhisk action
+<<<<<<< HEAD
  * (i.e. https://OW-HOST/api/v1/namespaces/NS/actions/ACTION) and the
+=======
+ * (i.e. https://OW-HOST/api/v1/namesapces/NS/actions/ACTION) and the
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
  * error response is just a string.  OpenWhisk backend logic will ultimately
  * convert this string into the above error object format.
  *
@@ -944,7 +948,11 @@ function makeErrorResponseObject(err, isWebAction) {
  *        body: JSON object or JSON string
  *     }
  * Otherwise, the action was invoked as a regular OpenWhisk action
+<<<<<<< HEAD
  * (i.e. https://OW-HOST/api/v1/namespaces/NS/actions/ACTION) and the
+=======
+ * (i.e. https://OW-HOST/api/v1/namesapces/NS/actions/ACTION) and the
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
  * response is just a string.  OpenWhisk backend logic will ultimately
  * convert this string into the above object format.
  *

@@ -23,10 +23,17 @@ sudo sudo apt-get install -y apt-transport-https ca-certificates curl gnupg-agen
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
 sudo apt-key fingerprint 0EBFCD88
 
+<<<<<<< HEAD
 sudo add-apt-repository \
    "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
 
 sudo add-apt-repository \
+=======
+sudo add-apt-repository -y \
+   "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+
+sudo add-apt-repository -y \
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
     "deb [arch=$(uname -m | sed -e 's/x86_64/amd64/g')] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
 sudo apt-get -y update
 
@@ -35,6 +42,10 @@ sudo apt-get -y update
 sudo apt-get --no-install-recommends -y install linux-image-extra-virtual
 
 # DOCKER
+<<<<<<< HEAD
+=======
+
+>>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
 sudo apt-get install -y docker-ce=18.06.3~ce~3-0~ubuntu containerd.io
 sudo apt-mark hold docker-ce
 
