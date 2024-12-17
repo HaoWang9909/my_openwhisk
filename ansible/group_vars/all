@@ -306,10 +306,9 @@ db:
       user: "{{ db_scheduler_user | default(lookup('ini', 'db_username section=scheduler file={{ playbook_dir }}/db_local.ini')) }}"
       pass: "{{ db_scheduler_pass | default(lookup('ini', 'db_password section=scheduler file={{ playbook_dir }}/db_local.ini')) }}"
   artifact_store:
-    backend: "CouchDB"
-    #backend: "{{ db_artifact_backend | default('CouchDB') }}"
+    backend: "{{ db_artifact_backend | default('CouchDB') }}"
   activation_store:
-    backend: "CouchDB"
+    backend: "{{ db_activation_backend | default('CouchDB') }}"
   elasticsearch:
     protocol: "{{ elastic_protocol | default('http') }}"
     port: "{{ elastic_port | default(9200) }}"
