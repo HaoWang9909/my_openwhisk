@@ -91,6 +91,8 @@ class FPCPoolBalancer(config: WhiskConfig,
   private val totalActivations = new LongAdder()
   private val totalActivationMemory = new LongAdder()
   private val throttlers = TrieMap[String, Boolean]()
+  private val activationsPerAction = TrieMap[String, LongAdder]()
+  private val activationsPerInvoker = TrieMap[InvokerInstanceId, LongAdder]()
 
   /**
    * Publishes activation message on internal bus for an invoker to pick up.
@@ -226,6 +228,15 @@ class FPCPoolBalancer(config: WhiskConfig,
     activationsPerNamespace.getOrElseUpdate(msg.user.namespace.uuid, new LongAdder()).increment()
     activationsPerController.getOrElseUpdate(controllerInstance, new LongAdder()).increment()
 
+    val actionKey = action.fullyQualifiedName(true).toString
+    activationsPerAction.getOrElseUpdate(actionKey, new LongAdder()).increment()
+
+    val invokerId = Option(msg.rootControllerIndex).map(id => 
+      InvokerInstanceId(id.asString.toInt, Some(id.asString), Some(id.asString), 0.MB))
+    invokerId.foreach { id =>
+      activationsPerInvoker.getOrElseUpdate(id, new LongAdder()).increment()
+    }
+
     // Timeout is a multiple of the configured maximum action duration. The minimum timeout is the configured standard
     // value for action durations to avoid too tight timeouts.
     // Timeouts in general are diluted by a configurable factor. In essence this factor controls how much slack you want
@@ -259,7 +270,8 @@ class FPCPoolBalancer(config: WhiskConfig,
           timeoutHandler,
           isBlackboxInvocation,
           msg.blocking,
-          controllerInstance)
+          controllerInstance,
+          invoker = invokerId)
       })
 
     resultPromise
@@ -381,6 +393,13 @@ class FPCPoolBalancer(config: WhiskConfig,
         totalActivationMemory.add(entry.memory.toMB * (-1))
         activationsPerNamespace.get(entry.namespaceId).foreach(_.decrement())
         activationsPerController.get(entry.controllerName).foreach(_.decrement())
+
+        val actionKey = entry.fullyQualifiedEntityName.toString
+        activationsPerAction.get(actionKey).foreach(_.decrement())
+
+        entry.invoker.foreach { id =>
+          activationsPerInvoker.get(id).foreach(_.decrement())
+        }
 
         if (!forced) {
           entry.timeoutHandler.cancel()
@@ -657,6 +676,28 @@ class FPCPoolBalancer(config: WhiskConfig,
 
   actorSystem.scheduler.scheduleAtFixedRate(10.seconds, 10.seconds)(() => emitMetrics())
 
+  def logActivationStats(): Unit = {
+    implicit val transid = TransactionId.controller
+    
+    logging.info(this, s"Total in-flight activations: ${totalActivations.intValue()}")
+    logging.info(this, s"In-flight activations for controller ${controllerInstance}: ${activationsPerController.get(controllerInstance).map(_.intValue()).getOrElse(0)}")
+    
+    activationsPerNamespace.foreach { case (ns, count) =>
+      logging.info(this, s"In-flight activations for namespace ${ns}: ${count.intValue()}")
+    }
+    
+    activationsPerAction.foreach { case (action, count) =>
+      logging.info(this, s"In-flight activations for action ${action}: ${count.intValue()}")
+    }
+    
+    activationsPerInvoker.foreach { case (invokerId, count) =>
+      val simpleId = invokerId.instance
+      logging.info(this, s"In-flight activations for invoker ${simpleId}: ${count.intValue()}")
+    }
+  }
+
+  actorSystem.scheduler.scheduleAtFixedRate(0.seconds, 100.seconds)(() => logActivationStats())
+
   /** Gets the number of in-flight activations for a specific user. */
   override def activeActivationsFor(namespace: UUID): Future[Int] =
     Future.successful(activationsPerNamespace.get(namespace).map(_.intValue()).getOrElse(0))
@@ -671,7 +712,10 @@ class FPCPoolBalancer(config: WhiskConfig,
       activationSlots.values.map(entry => (entry.id.asString, entry.fullyQualifiedEntityName.toString)).toList)
 
   /** Gets the number of in-flight activations for a specific invoker. */
-  override def activeActivationsByInvoker(invoker: String): Future[Int] = Future.successful(0)
+  override def activeActivationsByInvoker(invoker: String): Future[Int] = {
+    val invokerId = InvokerInstanceId(invoker.toInt, userMemory = 0.MB)
+    Future.successful(activationsPerInvoker.get(invokerId).map(_.intValue()).getOrElse(0))
+  }
 
   /** Gets the number of in-flight activations in the system. */
   override def totalActiveActivations: Future[Int] = Future.successful(totalActivations.intValue())
@@ -691,6 +735,10 @@ class FPCPoolBalancer(config: WhiskConfig,
     throttlers.getOrElse(
       ThrottlingKeys.action(namespace.namespace, fqn),
       throttlers.getOrElse(ThrottlingKeys.namespace(namespace.root), false))
+  }
+
+  def activeActivationsForAction(actionName: String): Future[Int] = {
+    Future.successful(activationsPerAction.get(actionName).map(_.intValue()).getOrElse(0))
   }
 }
 
@@ -764,4 +812,5 @@ case class DistributedActivationEntry(id: ActivationId,
                                       timeoutHandler: Cancellable,
                                       isBlackbox: Boolean,
                                       isBlocking: Boolean,
-                                      controllerName: ControllerInstanceId = ControllerInstanceId("0"))
+                                      controllerName: ControllerInstanceId = ControllerInstanceId("0"),
+                                      invoker: Option[InvokerInstanceId] = None)
