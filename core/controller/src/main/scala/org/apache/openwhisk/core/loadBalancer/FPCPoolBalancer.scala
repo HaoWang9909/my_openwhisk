@@ -657,7 +657,7 @@ class FPCPoolBalancer(config: WhiskConfig,
         jedis.set(s"${RedisKeys.NS_ACTIVATIONS}${ns}", count.sum().toString)
       }
       
-      // 更新控制器激活数
+      // Update controller activation count
       activationsPerController.foreach { case (controller, count) =>
         jedis.set(s"${RedisKeys.CONTROLLER_ACTIVATIONS}${controller.asString}", count.sum().toString)
       }
