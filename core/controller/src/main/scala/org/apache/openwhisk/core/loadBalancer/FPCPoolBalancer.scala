@@ -669,7 +669,8 @@ class FPCPoolBalancer(config: WhiskConfig,
       
       // Update caller activation count
       activationsPerInvoker.foreach { case (invokerId, count) =>
-        jedis.set(s"${RedisKeys.INVOKER_ACTIVATIONS}${invokerId.toString}", count.sum().toString)
+        val simpleId = invokerId.instance
+        jedis.set(s"${RedisKeys.INVOKER_ACTIVATIONS}${simpleId}", count.sum().toString)
       }
     } match {
       case Success(_) => 
@@ -779,7 +780,7 @@ class FPCPoolBalancer(config: WhiskConfig,
     }
   }
 
-  actorSystem.scheduler.scheduleAtFixedRate(0.seconds, 100.seconds)(() => logActivationStats())
+  actorSystem.scheduler.scheduleAtFixedRate(0.seconds, 1.seconds)(() => logActivationStats())
 
   /** Gets the number of in-flight activations for a specific user. */
   override def activeActivationsFor(namespace: UUID): Future[Int] =
