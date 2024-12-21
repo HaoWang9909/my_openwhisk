@@ -37,7 +37,7 @@ import org.apache.openwhisk.core.etcd.{EtcdClient, EtcdConfig}
 import org.apache.openwhisk.core.scheduler.queue.{CreateQueue, CreateQueueResponse, QueueManager}
 import org.apache.openwhisk.core.scheduler.{SchedulerEndpoints, SchedulerStates}
 import org.apache.openwhisk.core.service._
-import org.apache.openwhisk.core.{ConfigKeys, WarmUp, WhiskConfig}
+import org.apache.openwhisk.core.{ConfigKeys, WarmUp, WhiskConfig, RedisConfig}
 import org.apache.openwhisk.spi.SpiLoader
 import org.apache.openwhisk.utils.retry
 import pureconfig._
@@ -52,9 +52,6 @@ import scala.language.postfixOps
 import scala.util.{Failure, Random, Success, Try}
 
 case class FPCPoolBalancerConfig(usePerMinThrottle: Boolean)
-
-// Redis Configuration Class
-case class RedisConfig(host: String = "149.165.175.243", port: Int = 6379, password: Option[String] = Some("openwhisk"))
 
 class FPCPoolBalancer(config: WhiskConfig,
                       controllerInstance: ControllerInstanceId,
