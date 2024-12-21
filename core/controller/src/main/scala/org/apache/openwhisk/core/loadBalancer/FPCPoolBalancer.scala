@@ -42,6 +42,7 @@ import org.apache.openwhisk.spi.SpiLoader
 import org.apache.openwhisk.utils.retry
 import pureconfig._
 import pureconfig.generic.auto._
+import redis.clients.jedis.{Jedis, JedisPool, JedisPoolConfig}
 
 import scala.collection.JavaConverters._
 import scala.collection.concurrent.TrieMap
@@ -51,6 +52,9 @@ import scala.language.postfixOps
 import scala.util.{Failure, Random, Success, Try}
 
 case class FPCPoolBalancerConfig(usePerMinThrottle: Boolean)
+
+// Redis Configuration Class
+case class RedisConfig(host: String = "149.165.175.243", port: Int = 6379, password: Option[String] = Some("openwhisk"))
 
 class FPCPoolBalancer(config: WhiskConfig,
                       controllerInstance: ControllerInstanceId,
@@ -603,11 +607,90 @@ class FPCPoolBalancer(config: WhiskConfig,
 
   loadSchedulerEndpoint()
 
+  // Redis connection pool configuration
+  private val redisConfig = RedisConfig()
+  private val poolConfig = new JedisPoolConfig()
+  poolConfig.setMaxTotal(100)
+  poolConfig.setMaxIdle(30)
+  poolConfig.setMinIdle(10)
+  
+  private val jedisPool = new JedisPool(poolConfig, redisConfig.host, redisConfig.port, 2000, redisConfig.password.orNull)
+
+  // Redis Key Name Prefix Definition
+  private object RedisKeys {
+    val TOTAL_ACTIVATIONS = "openwhisk:counter:total_activations"
+    val TOTAL_MEMORY = "openwhisk:counter:total_memory"
+    val NS_ACTIVATIONS = "openwhisk:counter:ns_activations:"
+    val CONTROLLER_ACTIVATIONS = "openwhisk:counter:controller_activations:"
+    val ACTION_ACTIVATIONS = "openwhisk:counter:action_activations:"
+    val INVOKER_ACTIVATIONS = "openwhisk:counter:invoker_activations:"
+  }
+
+  // Auxiliary Methods for Redis Operations
+  private def withRedis[T](f: Jedis => T): Try[T] = {
+    var jedis: Jedis = null
+    try {
+      jedis = jedisPool.getResource
+      Success(f(jedis))
+    } catch {
+      case e: Exception =>
+        logging.error(this, s"Redis operation failed: ${e.getMessage}")
+        Failure(e)
+    } finally {
+      if (jedis != null) {
+        jedis.close()
+      }
+    }
+  }
+
+  // Write counter data to Redis
+  private def updateRedisCounters(): Unit = {
+    implicit val transid = TransactionId.controller
+    
+    withRedis { jedis =>
+      // Update Total Activation Count
+      jedis.set(RedisKeys.TOTAL_ACTIVATIONS, totalActivations.sum().toString)
+      jedis.set(RedisKeys.TOTAL_MEMORY, totalActivationMemory.sum().toString)
+      
+      // Update namespace activation count
+      activationsPerNamespace.foreach { case (ns, count) =>
+        jedis.set(s"${RedisKeys.NS_ACTIVATIONS}${ns}", count.sum().toString)
+      }
+      
+      // 更新控制器激活数
+      activationsPerController.foreach { case (controller, count) =>
+        jedis.set(s"${RedisKeys.CONTROLLER_ACTIVATIONS}${controller.asString}", count.sum().toString)
+      }
+      
+      // Update action activation count
+      activationsPerAction.foreach { case (action, count) =>
+        jedis.set(s"${RedisKeys.ACTION_ACTIVATIONS}${action}", count.sum().toString)
+      }
+      
+      // Update caller activation count
+      activationsPerInvoker.foreach { case (invokerId, count) =>
+        jedis.set(s"${RedisKeys.INVOKER_ACTIVATIONS}${invokerId.toString}", count.sum().toString)
+      }
+    } match {
+      case Success(_) => 
+        logging.debug(this, "Successfully updated Redis counters")
+      case Failure(e) => 
+        logging.error(this, s"Failed to update Redis counters: ${e.getMessage}")
+    }
+  }
+
+  // Add a scheduled task to update the Redis counter
+  actorSystem.scheduler.scheduleAtFixedRate(0.seconds, 1.seconds)(() => updateRedisCounters())
+
+  // Release Redis connection pool when closing
   override def close(): Unit = {
     watchedKeys.foreach { key =>
       watcherService ! UnwatchEndpoint(key, true, watcherName)
     }
     activationFeed ! GracefulShutdown
+    if (jedisPool != null) {
+      jedisPool.close()
+    }
   }
 
   /**

@@ -25,10 +25,6 @@ echo "Stopping CouchDB"
 sudo systemctl stop couchdb
 check_success
 
-echo "Stopping etcd"
-sudo systemctl stop etcd
-check_success
-
 # Go back to previous directory
 cd ..
 check_success
