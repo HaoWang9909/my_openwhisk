@@ -49,6 +49,9 @@ dependencies {
     implementation "com.lightbend.akka.management:akka-management-cluster-bootstrap_${gradle.scala.depVersion}:${gradle.akka_management.version}"
     implementation "com.lightbend.akka.discovery:akka-discovery-kubernetes-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
     implementation "com.lightbend.akka.discovery:akka-discovery-marathon-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    
+    // Redis client dependency
+    implementation "redis.clients:jedis:4.3.1"
 }
 
 mainClassName = "org.apache.openwhisk.core.controller.Controller"
