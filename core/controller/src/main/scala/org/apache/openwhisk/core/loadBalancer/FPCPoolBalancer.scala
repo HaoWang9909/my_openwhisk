@@ -20,7 +20,7 @@ package org.apache.openwhisk.core.loadBalancer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.LongAdder
-import akka.actor.{Actor, ActorRef, ActorRefFactory, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorRef, ActorRefFactory, ActorSystem, Props}
 import akka.event.Logging.InfoLevel
 import akka.pattern.ask
 import akka.util.Timeout
@@ -874,24 +874,3 @@ object FPCPoolBalancer extends LoadBalancerProvider {
   }
 
 }
-
-/**
- * State kept for each activation slot until completion.
- *
- * @param id id of the activation
- * @param namespaceId namespace that invoked the action
- * @param timeoutHandler times out completion of this activation, should be canceled on good paths
- */
-case class DistributedActivationEntry(id: ActivationId,
-                                      namespaceId: UUID,
-                                      invocationNamespace: String,
-                                      revision: DocRevision,
-                                      transactionId: TransactionId,
-                                      memory: ByteSize,
-                                      maxConcurrent: Int,
-                                      fullyQualifiedEntityName: FullyQualifiedEntityName,
-                                      timeoutHandler: Cancellable,
-                                      isBlackbox: Boolean,
-                                      isBlocking: Boolean,
-                                      controllerName: ControllerInstanceId = ControllerInstanceId("0"),
-                                      invoker: Option[InvokerInstanceId] = None)
