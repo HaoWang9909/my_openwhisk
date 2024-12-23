@@ -41,7 +41,7 @@ log_action "Starting Deployment Process"
 
 # Run Ansible playbooks in sequence
 log_action "Running controller.yml with mode=clean"
-sudo ansible-playbook -i environments/$ENVIRONMENT controller.yml -e mode=clean
+sudo ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml -e mode=clean
 check_success
 progress_bar 10
 
