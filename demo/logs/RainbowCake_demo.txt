@@ -1,0 +1,13 @@
+
+**********
+**********
+**********
+
+Running RainbowCake_demo
+Exp 0, Episode 0 finished
+9 actual timesteps
+1 system timesteps
+1.000000238418579 system runtime
+Total events: 9
+Total reward: 0
+Timeout num: 0
