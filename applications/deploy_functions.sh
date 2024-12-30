@@ -102,8 +102,8 @@ cd build && npm install
 zip -r index.zip *
 
 # Create couchdb database
-curl -X PUT "http://admin:admin@149.165.175.243:5984/ul"
-curl -X PUT "http://admin:admin@149.165.175.243:5984/ul/'file'" -d '{"success": true}'
+curl -X PUT "http://admin:admin@149.165.159.154:5984/ul"
+curl -X PUT "http://admin:admin@149.165.159.154:5984/ul/'file'" -d '{"success": true}'
 
 wsk -i action update ul --kind nodejs:18 --main main --memory $memory --timeout $timeout index.zip
 

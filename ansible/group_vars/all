@@ -54,9 +54,9 @@ whisk:
   cluster_name: "{{ whisk_cluster_name | default('whisk') }}"
   containerProxy:
     timeouts:
-      idleContainer: "{{ containerProxy_timeouts_idleContainer | default('10 minutes') }}"
+      idleContainer: "{{ containerProxy_timeouts_idleContainer | default('1 minutes') }}"
       pauseGrace: "{{ containerProxy_timeouts_pauseGrace | default('10 seconds') }}"
-      keepingDuration: "{{ containerProxy_timeouts_keepingDuration | default('10 minutes') }}"
+      keepingDuration: "{{ containerProxy_timeouts_keepingDuration | default('1 minutes') }}"
 
 ##
 # configuration parameters related to support runtimes (see org.apache.openwhisk.core.entity.ExecManifest for schema of the manifest).
@@ -215,7 +215,7 @@ invoker:
   # Specify if it is allowed to deploy more than 1 invoker on a single machine.
   allowMultipleInstances: "{{ invoker_allow_multiple_instances | default(false) }}"
   # Specify if it should use runc or docker to pause/unpause containers
-  useRunc: "{{ invoker_use_runc | default(true) }}"
+  useRunc: false
   docker:
     become: "{{ invoker_docker_become | default(false) }}"
     runcdir: "{{ invoker_runcdir | default('/run/docker/runtime-runc/moby') }}"

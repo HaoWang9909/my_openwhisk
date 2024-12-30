@@ -18,4 +18,4 @@
 package org.apache.openwhisk.core
 
 // Redis Configuration Class
-case class RedisConfig(host: String = "149.165.175.243", port: Int = 6379, password: Option[String] = Some("openwhisk")) 
+case class RedisConfig(host: String = "149.165.159.154", port: Int = 6379, password: Option[String] = Some("openwhisk")) 

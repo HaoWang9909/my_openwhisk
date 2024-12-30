@@ -481,7 +481,7 @@ class RequestRecord():
                 timeline_dict[invoke_time]["total_user_time"] = timeline_dict[invoke_time]["total_user_time"] + request.get_user_time()
                 timeline_dict[invoke_time]["total_lang_time"] = timeline_dict[invoke_time]["total_lang_time"] + request.get_lang_time()
                 timeline_dict[invoke_time]["total_bare_time"] = timeline_dict[invoke_time]["total_bare_time"] + request.get_bare_time()
-
+                         
         if not timeline_dict:
             return "time,total_init_time,total_wait_time,total_duration,num_user,num_lang,num_bare,num_cold,total_user_time,total_lang_time,total_bare_time\n"
             

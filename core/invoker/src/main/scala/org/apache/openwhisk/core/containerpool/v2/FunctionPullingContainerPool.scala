@@ -318,36 +318,36 @@ class FunctionPullingContainerPool(
         sendAckToScheduler(msg.rootSchedulerIndex, ack)
       }
 
-    case Resumed(data) =>
-      busyPool = busyPool + (sender() -> data)
-      inProgressPool = inProgressPool - sender()
-      // container init completed, send creationAck(success) to scheduler
-      creationMessages.remove(sender()).foreach { msg =>
-        val ack = ContainerCreationAckMessage(
-          msg.transid,
-          msg.creationId,
-          msg.invocationNamespace,
-          msg.action,
-          msg.revision,
-          msg.whiskActionMetaData,
-          instance,
-          msg.schedulerHost,
-          msg.rpcPort,
-          msg.retryCount)
-        sendAckToScheduler(msg.rootSchedulerIndex, ack)
-      }
+    // case Resumed(data) =>
+    //   busyPool = busyPool + (sender() -> data)
+    //   inProgressPool = inProgressPool - sender()
+    //   // container init completed, send creationAck(success) to scheduler
+    //   creationMessages.remove(sender()).foreach { msg =>
+    //     val ack = ContainerCreationAckMessage(
+    //       msg.transid,
+    //       msg.creationId,
+    //       msg.invocationNamespace,
+    //       msg.action,
+    //       msg.revision,
+    //       msg.whiskActionMetaData,
+    //       instance,
+    //       msg.schedulerHost,
+    //       msg.rpcPort,
+    //       msg.retryCount)
+    //     sendAckToScheduler(msg.rootSchedulerIndex, ack)
+    //   }
 
     // if warmed containers is failed to resume, we should try to use other container or create a new one
-    case ResumeFailed(data) =>
-      inProgressPool = inProgressPool - sender()
-      creationMessages.remove(sender()).foreach { msg =>
-        val container = takeWarmedContainer(data.action, data.invocationNamespace, data.revision)
-          .map(container => (container, "warmed"))
-          .orElse {
-            takeContainer(data.action)
-          }
-        handleChosenContainer(msg, data.action, container)
-      }
+    // case ResumeFailed(data) =>
+    //   inProgressPool = inProgressPool - sender()
+    //   creationMessages.remove(sender()).foreach { msg =>
+    //     val container = takeWarmedContainer(data.action, data.invocationNamespace, data.revision)
+    //       .map(container => (container, "warmed"))
+    //       .orElse {
+    //         takeContainer(data.action)
+    //       }
+    //     handleChosenContainer(msg, data.action, container)
+    //   }
 
     case ContainerCreationFailed(t) =>
       val (error, message) = t match {
@@ -372,9 +372,9 @@ class FunctionPullingContainerPool(
         sendAckToScheduler(msg.rootSchedulerIndex, ack)
       }
 
-    case ContainerIsPaused(data) =>
-      warmedPool = warmedPool + (sender() -> data)
-      busyPool = busyPool - sender() // remove container from busy pool
+    // case ContainerIsPaused(data) =>
+    //   warmedPool = warmedPool + (sender() -> data)
+    //   busyPool = busyPool - sender() // remove container from busy pool
 
     // Container got removed
     case ContainerRemoved(replacePrewarm) =>
