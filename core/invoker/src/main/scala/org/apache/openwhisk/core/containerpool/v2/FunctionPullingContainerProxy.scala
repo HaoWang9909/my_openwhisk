@@ -513,6 +513,7 @@ class FunctionPullingContainerProxy(
     // Run was successful.
     // 1. request activation message to client
     case Event(activationResult: RunActivationCompleted, data: WarmData) =>
+      logging.info(this, s"Container ${data.container.containerId} completed activation and staying warm during keep-alive period - skipping Paused state")
       // create timeout
       startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
       data.clientProxy ! RequestActivation(activationResult.duration)
@@ -520,6 +521,7 @@ class FunctionPullingContainerProxy(
 
     // 2. read executable action data from db
     case Event(job: ActivationMessage, data: WarmData) =>
+      logging.info(this, s"Container ${data.container.containerId} received new activation ${job.activationId} while warm - skipping Paused state")
       timedOut = false
       cancelTimer(UnusedTimeoutName)
       handleActivationMessage(job, data.action)
@@ -528,6 +530,7 @@ class FunctionPullingContainerProxy(
 
     // 3. request run command to container
     case Event(job: RunActivation, data: WarmData) =>
+      logging.info(this, s"Container ${data.container.containerId} executing activation ${job.msg.activationId} while warm - skipping Paused state")
       logging.debug(this, s"received RunActivation ${job.msg.activationId} for ${job.action} in $stateName")
       implicit val transid = job.msg.transid
 
