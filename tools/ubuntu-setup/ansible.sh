@@ -19,21 +19,6 @@
 set -e
 set -x
 
-<<<<<<< HEAD
-sudo pip install --upgrade setuptools pip
-sudo apt-get install -y software-properties-common
-sudo apt-add-repository -y ppa:ansible/ansible
-sudo apt-get update
-sudo apt-get install -y python-dev libffi-dev libssl-dev
-sudo pip install markupsafe
-sudo pip install ansible==2.5.2
-sudo pip install jinja2==2.9.6
-sudo pip install docker==2.2.1    --ignore-installed  --force-reinstall
-sudo pip install httplib2==0.9.2  --ignore-installed  --force-reinstall
-sudo pip install requests==2.10.0 --ignore-installed  --force-reinstall
-
-ansible --version
-=======
 sudo pip install setuptools==57.5.0
 sudo apt-get install -y software-properties-common
 # sudo apt-add-repository -y ppa:ansible/ansible
@@ -47,5 +32,4 @@ sudo pip install httplib2
 sudo pip install requests
 
 # ansible --version
->>>>>>> 8e35ece5 (Initial commit with my customized OpenWhisk setup)
 ansible-playbook --version
