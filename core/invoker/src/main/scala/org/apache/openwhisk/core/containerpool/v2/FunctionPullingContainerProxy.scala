@@ -282,6 +282,56 @@ class FunctionPullingContainerProxy(
 
       goto(CreatingClient)
 
+    // handle prewarm initialization without running
+    case Event(job: InitializeButNotRun, _) =>
+      implicit val transid = TransactionId.invokerWarmup
+      logging.info(this, s"Initializing container for ${job.action} without running")
+      
+      // Get the action from the entity store
+      val actionId = job.action.toDocId.asDocInfo(job.revision)  
+      get(entityStore, actionId.id, actionId.rev, true, false).flatMap { action =>
+        action.toExecutableWhiskAction match {
+          case Some(executable) =>
+            factory(
+              transid,
+              containerName(instance, job.invocationNamespace, job.action.name.asString),
+              executable.exec.image,
+              executable.exec.pull,
+              job.memoryLimit,
+              poolConfig.cpuShare(job.memoryLimit),
+              poolConfig.cpuLimit(job.memoryLimit),
+              None)
+              .andThen {
+                case Failure(t) =>
+                  context.parent ! ContainerCreationFailed(t)
+              }
+              .map { container =>
+                logging.debug(this, s"a container ${container.containerId} is created for prewarm init ${job.action}")
+                // create a client
+                Try(
+                  clientProxyFactory(
+                    context,
+                    job.invocationNamespace,
+                    job.action,
+                    job.revision,
+                    job.schedulerHost,
+                    job.rpcPort,
+                    container.containerId)) match {
+                  case Success(clientProxy) =>
+                    InitializedData(container, job.invocationNamespace, executable, clientProxy)
+                  case Failure(t) =>
+                    logging.error(this, s"failed to create activation client caused by: $t")
+                    ClientCreationFailed(t, container, job.invocationNamespace, executable)
+                }
+              }
+              .pipeTo(self)
+          case None =>
+            Future.failed(new IllegalStateException("non-executable action reached the invoker"))
+        }
+      }
+
+      goto(CreatingClient)
+
     case _ => delay
   }
 
@@ -376,11 +426,24 @@ class FunctionPullingContainerProxy(
   when(ClientCreated) {
     // 1. request activation message to client
     case Event(initializedData: InitializedData, _) =>
-      context.parent ! Initialized(initializedData)
-      initializedData.clientProxy ! RequestActivation()
-      startTimerWithFixedDelay(PingCacheName, PingCache, pingCacheInterval)
-      startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
-      stay() using initializedData
+      // Check if this is a prewarm initialization
+      if (initializedData.clientProxy.path.name.contains("prewarm")) {
+        // For prewarm initialization, just initialize the container without running
+        logging.info(this, s"Performing prewarm initialization for ${initializedData.action}")
+        initializeOnly(initializedData.container, initializedData.clientProxy, initializedData.action)(TransactionId.invokerWarmup)
+          .map { warmData =>
+            InitCodeCompleted(warmData)
+          }
+          .pipeTo(self)
+        stay() using initializedData
+      } else {
+        // Normal initialization with activation
+        context.parent ! Initialized(initializedData)
+        initializedData.clientProxy ! RequestActivation()
+        startTimerWithFixedDelay(PingCacheName, PingCache, pingCacheInterval)
+        startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
+        stay() using initializedData
+      }
 
     // 2. read executable action data from db
     case Event(job: ActivationMessage, data: InitializedData) =>
@@ -894,7 +957,47 @@ class FunctionPullingContainerProxy(
   }
 
   /**
-   * Runs the job, initialize first if necessary.
+   * Initialize container without running activation
+   * 
+   * @param container the container to initialize
+   * @param clientProxy the client proxy actor
+   * @param action the action to initialize
+   * @param transid the transaction id
+   * @return a future completing after initialization
+   */
+  private def initializeOnly(
+    container: Container,
+    clientProxy: ActorRef,
+    action: ExecutableWhiskAction)(implicit tid: TransactionId): Future[WarmData] = {
+
+    val actionTimeout = action.limits.timeout.duration
+    
+    // Only initialize if we haven't yet warmed the container
+    val initialize = stateData match {
+      case _: WarmData =>
+        Future.successful(None)
+      case _ =>
+        val env = Map(
+          "namespace" -> action.namespace.toString.toJson,
+          "action_name" -> action.name.toString.toJson,
+          "action_version" -> action.version.toString.toJson)
+        
+        val owEnv = env map {
+          case (key, value) => "__OW_" + key.toUpperCase -> value
+        }
+
+        container
+          .initialize(action.containerInitializer(owEnv), actionTimeout, action.limits.concurrency.maxConcurrent)
+          .map(Some(_))
+    }
+
+    initialize.map { initInterval =>
+      // Create warm data after initialization
+      WarmData(container, action.namespace.toString, action, DocRevision.empty, Instant.now, clientProxy)
+    }
+  }
+
+  /** Runs the job, initialize first if necessary.
    * Completes the job by:
    * 1. sending an activate ack,
    * 2. fetching the logs for the run,
