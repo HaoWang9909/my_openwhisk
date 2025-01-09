@@ -37,12 +37,13 @@ import org.apache.openwhisk.core.etcd.{EtcdClient, EtcdConfig}
 import org.apache.openwhisk.core.scheduler.queue.{CreateQueue, CreateQueueResponse, QueueManager}
 import org.apache.openwhisk.core.scheduler.{SchedulerEndpoints, SchedulerStates}
 import org.apache.openwhisk.core.service._
-import org.apache.openwhisk.core.{ConfigKeys, WarmUp, WhiskConfig, RedisConfig}
+import org.apache.openwhisk.core.{ConfigKeys, WarmUp, WhiskConfig}
 import org.apache.openwhisk.spi.SpiLoader
 import org.apache.openwhisk.utils.retry
 import pureconfig._
 import pureconfig.generic.auto._
 import redis.clients.jedis.{Jedis, JedisPool, JedisPoolConfig}
+import org.apache.openwhisk.core.redis.RedisConfig
 
 import scala.collection.JavaConverters._
 import scala.collection.concurrent.TrieMap

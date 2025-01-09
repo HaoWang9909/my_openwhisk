@@ -15,7 +15,26 @@
  * limitations under the License.
  */
 
-package org.apache.openwhisk.core
+package org.apache.openwhisk.core.containerpool.v2
 
-// Redis Configuration Class
-case class RedisConfig(host: String = "149.165.159.154", port: Int = 6379, password: Option[String] = Some("openwhisk")) 
+import java.time.Instant
+import spray.json._
+
+
+case class ContainerStats(
+  timestamp: Instant,
+  cpuUsage: Double, // CPU使用率百分比
+  memoryUsage: Long, // 内存使用字节数
+  containerId: String)
+
+object ContainerStats extends DefaultJsonProtocol {
+  implicit val instantFormat = new JsonFormat[Instant] {
+    def write(instant: Instant) = JsNumber(instant.toEpochMilli)
+    def read(value: JsValue) = value match {
+      case JsNumber(time) => Instant.ofEpochMilli(time.toLong)
+      case _             => throw new DeserializationException("Instant expected")
+    }
+  }
+
+  implicit val containerStatsFormat = jsonFormat4(ContainerStats.apply)
+} 

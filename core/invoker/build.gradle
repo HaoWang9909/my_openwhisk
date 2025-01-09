@@ -44,6 +44,7 @@ dependencies {
     implementation "org.scala-lang:scala-library:${gradle.scala.version}"
     implementation project(':common:scala')
     implementation project(':core:scheduler')
+    implementation "redis.clients:jedis:4.3.1"
 
     implementation ("org.apache.curator:curator-recipes:${gradle.curator.version}") {
         exclude group: 'org.apache.zookeeper', module:'zookeeper'

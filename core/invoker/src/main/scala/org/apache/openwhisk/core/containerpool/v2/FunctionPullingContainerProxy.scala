@@ -228,6 +228,12 @@ class FunctionPullingContainerProxy(
 
   val runningActivations = new java.util.concurrent.ConcurrentHashMap[String, Boolean]
 
+  // 修改 Redis 客户端的创建
+  private val redisClient = context.actorOf(RedisClient.props(logging))
+  
+  // 添加容器监控Actor引用
+  private var containerMonitor: Option[ActorRef] = None
+
   when(Uninitialized) {
     // pre warm a container (creates a stem cell container)
     case Event(job: Start, _) =>
@@ -426,6 +432,14 @@ class FunctionPullingContainerProxy(
   when(ClientCreated) {
     // 1. request activation message to client
     case Event(initializedData: InitializedData, _) =>
+      // 启动容器监控
+      containerMonitor = Some(context.actorOf(
+        ContainerMonitor.props(
+          initializedData.container,
+          redisClient,
+          instance,
+          logging)))
+          
       // Check if this is a prewarm initialization
       if (initializedData.clientProxy.path.name.contains("prewarm")) {
         // For prewarm initialization, just initialize the container without running
@@ -805,6 +819,10 @@ class FunctionPullingContainerProxy(
   }
 
   private def cleanUp(container: Container, clientProxy: Option[ActorRef], replacePrewarm: Boolean = true): State = {
+    // 停止监控
+    containerMonitor.foreach(_ ! ContainerMonitor.StopMonitoring)
+    containerMonitor = None
+    
     context.parent ! ContainerRemoved(replacePrewarm)
     destroyContainer(container)
     clientProxy match {
