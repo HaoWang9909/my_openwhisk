@@ -113,7 +113,7 @@ class ContainerMonitor(container: Container,
       // 发送到 Redis
       redisClient ! SaveContainerStats(stats)
       
-      logging.info(this, s"Container stats collected: CPU=${cpuUsagePercent}%, Memory=${memoryUsage}bytes, Path=$containerCgroupPath")
+      //logging.info(this, s"Container stats collected: CPU=${cpuUsagePercent}%, Memory=${memoryUsage}bytes, Path=$containerCgroupPath")
       
     } catch {
       case e: Exception =>
