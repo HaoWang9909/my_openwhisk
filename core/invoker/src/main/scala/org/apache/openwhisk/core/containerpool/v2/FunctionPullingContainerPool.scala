@@ -78,17 +78,6 @@ case object Remove
 case class Keep(timeout: FiniteDuration)
 case class PrewarmContainer(maxConcurrent: Int)
 
-// Events used internally
-case class PrewarmInitAction(
-  action: FullyQualifiedEntityName, 
-  memoryLimit: ByteSize, 
-  invocationNamespace: String,
-  schedulerHost: String, 
-  rpcPort: Int,
-  revision: DocRevision)  // 添加 revision 参数
-
-case class InitializeButNotRun(invocationNamespace: String, action: FullyQualifiedEntityName, memoryLimit: ByteSize, schedulerHost: String, rpcPort: Int, revision: DocRevision)
-
 /**
  * A pool managing containers to run actions on.
  *
@@ -137,9 +126,6 @@ class FunctionPullingContainerPool(
   private var preWarmScheduler: Option[Cancellable] = None
   private var prewarmConfigQueue = Queue.empty[(CodeExec[_], ByteSize, Option[FiniteDuration])]
   private val prewarmCreateFailedCount = new AtomicInteger(0)
-
-  // 添加一个Map来跟踪每个Action的定时器
-  private val initPrewarmTimers = new TrieMap[String, Cancellable]()
 
   val logScheduler = context.system.scheduler.scheduleAtFixedRate(0.seconds, 1.seconds)(() => {
     MetricEmitter.emitHistogramMetric(
@@ -221,20 +207,6 @@ class FunctionPullingContainerPool(
         }
       }
 
-    case PrewarmInitAction(action, memoryLimit, invocationNamespace, schedulerHost, rpcPort, revision) =>
-      logging.info(this, s"Received PrewarmInitAction for ${action.asString} with memory ${memoryLimit}")
-      
-      // 检查是否有足够的资源来创建预热容器
-      val freeMemory = poolConfig.userMemory.toMB - memoryConsumptionOf(busyPool ++ warmedPool ++ inProgressPool)
-      if (memoryLimit.toMB <= freeMemory) {
-        // 创建一个新的容器代理来处理预热初始化
-        val proxy = childFactory(context)
-        proxy ! InitializeButNotRun(invocationNamespace, action, memoryLimit, schedulerHost, rpcPort, revision)
-        inProgressPool = inProgressPool + (proxy -> MemoryData(memoryLimit))
-      } else {
-        logging.warn(this, s"Not enough memory for prewarm initialization of ${action.asString}")
-      }
-
     case CreationContainer(create: ContainerCreationMessage, action: WhiskAction) =>
       if (shuttingDown) {
         val message =
@@ -256,18 +228,6 @@ class FunctionPullingContainerPool(
         sendAckToScheduler(create.rootSchedulerIndex, ack)
       } else {
         logging.info(this, s"received a container creation message: ${create.creationId}")
-        
-        // 为这个Action设置3分钟后的预热定时器
-        val actionKey = s"${create.invocationNamespace}/${create.action.asString}"
-        initPrewarmTimers.get(actionKey).foreach(_.cancel()) // 取消已存在的定时器
-        
-        val timer = context.system.scheduler.scheduleOnce(3.minutes) {
-          self ! PrewarmInitAction(create.action, action.limits.memory.megabytes.MB, create.invocationNamespace, create.schedulerHost, create.rpcPort, create.revision)
-        }(context.dispatcher)
-        
-        initPrewarmTimers.put(actionKey, timer)
-        
-        // 继续原有的容器创建逻辑
         action.toExecutableWhiskAction match {
           case Some(executable) =>
             val createdContainer =
@@ -358,36 +318,36 @@ class FunctionPullingContainerPool(
         sendAckToScheduler(msg.rootSchedulerIndex, ack)
       }
 
-    // case Resumed(data) =>
-    //   busyPool = busyPool + (sender() -> data)
-    //   inProgressPool = inProgressPool - sender()
-    //   // container init completed, send creationAck(success) to scheduler
-    //   creationMessages.remove(sender()).foreach { msg =>
-    //     val ack = ContainerCreationAckMessage(
-    //       msg.transid,
-    //       msg.creationId,
-    //       msg.invocationNamespace,
-    //       msg.action,
-    //       msg.revision,
-    //       msg.whiskActionMetaData,
-    //       instance,
-    //       msg.schedulerHost,
-    //       msg.rpcPort,
-    //       msg.retryCount)
-    //     sendAckToScheduler(msg.rootSchedulerIndex, ack)
-    //   }
+    case Resumed(data) =>
+      busyPool = busyPool + (sender() -> data)
+      inProgressPool = inProgressPool - sender()
+      // container init completed, send creationAck(success) to scheduler
+      creationMessages.remove(sender()).foreach { msg =>
+        val ack = ContainerCreationAckMessage(
+          msg.transid,
+          msg.creationId,
+          msg.invocationNamespace,
+          msg.action,
+          msg.revision,
+          msg.whiskActionMetaData,
+          instance,
+          msg.schedulerHost,
+          msg.rpcPort,
+          msg.retryCount)
+        sendAckToScheduler(msg.rootSchedulerIndex, ack)
+      }
 
     // if warmed containers is failed to resume, we should try to use other container or create a new one
-    // case ResumeFailed(data) =>
-    //   inProgressPool = inProgressPool - sender()
-    //   creationMessages.remove(sender()).foreach { msg =>
-    //     val container = takeWarmedContainer(data.action, data.invocationNamespace, data.revision)
-    //       .map(container => (container, "warmed"))
-    //       .orElse {
-    //         takeContainer(data.action)
-    //       }
-    //     handleChosenContainer(msg, data.action, container)
-    //   }
+    case ResumeFailed(data) =>
+      inProgressPool = inProgressPool - sender()
+      creationMessages.remove(sender()).foreach { msg =>
+        val container = takeWarmedContainer(data.action, data.invocationNamespace, data.revision)
+          .map(container => (container, "warmed"))
+          .orElse {
+            takeContainer(data.action)
+          }
+        handleChosenContainer(msg, data.action, container)
+      }
 
     case ContainerCreationFailed(t) =>
       val (error, message) = t match {
@@ -412,9 +372,9 @@ class FunctionPullingContainerPool(
         sendAckToScheduler(msg.rootSchedulerIndex, ack)
       }
 
-    // case ContainerIsPaused(data) =>
-    //   warmedPool = warmedPool + (sender() -> data)
-    //   busyPool = busyPool - sender() // remove container from busy pool
+    case ContainerIsPaused(data) =>
+      warmedPool = warmedPool + (sender() -> data)
+      busyPool = busyPool - sender() // remove container from busy pool
 
     // Container got removed
     case ContainerRemoved(replacePrewarm) =>
