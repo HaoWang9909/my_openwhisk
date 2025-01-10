@@ -231,12 +231,6 @@ class FunctionPullingContainerProxy(
 
   val runningActivations = new java.util.concurrent.ConcurrentHashMap[String, Boolean]
 
-  // 修改 Redis 客户端的创建
-  private val redisClient = context.actorOf(RedisClient.props(logging))
-  
-  // 添加容器监控Actor引用
-  private var containerMonitor: Option[ActorRef] = None
-
   when(Uninitialized) {
     // pre warm a container (creates a stem cell container)
     case Event(job: Start, _) =>
@@ -383,13 +377,6 @@ class FunctionPullingContainerProxy(
 
   // this is for first invocation, once the first invocation is over we are ready to trigger getActivation for action concurrency
   when(ClientCreated) {
-    // 启动容器监控
-    containerMonitor = Some(context.actorOf(
-      ContainerMonitor.props(
-      initializedData.container,
-      redisClient,
-      instance,
-      logging)))
     // 1. request activation message to client
     case Event(initializedData: InitializedData, _) =>
       context.parent ! Initialized(initializedData)
@@ -873,10 +860,6 @@ class FunctionPullingContainerProxy(
                       fqn: FullyQualifiedEntityName,
                       revision: DocRevision,
                       clientProxy: Option[ActorRef]): State = {
-    // 停止监控
-    containerMonitor.foreach(_ ! ContainerMonitor.StopMonitoring)
-    containerMonitor = None
-    
     cancelTimer(PingCacheName)
     dataManagementService ! UnregisterData(
       s"${ContainerKeys.existingContainers(invocationNamespace, fqn, revision, Some(instance), Some(container.containerId))}")
@@ -885,10 +868,6 @@ class FunctionPullingContainerProxy(
   }
 
   private def cleanUp(container: Container, clientProxy: Option[ActorRef], replacePrewarm: Boolean = true): State = {
-    // 停止监控
-    containerMonitor.foreach(_ ! ContainerMonitor.StopMonitoring)
-    containerMonitor = None
-    
     context.parent ! ContainerRemoved(replacePrewarm)
     val unpause = stateName match {
       case Paused => container.resume()(TransactionId.invokerNanny)
