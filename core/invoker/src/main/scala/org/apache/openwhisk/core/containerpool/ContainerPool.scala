@@ -17,7 +17,7 @@
 
 package org.apache.openwhisk.core.containerpool
 
-import akka.actor.{Actor, ActorRef, ActorRefFactory, Props}
+import akka.actor.{Actor, ActorRef, ActorRefFactory, Props, Cancellable}
 import org.apache.openwhisk.common.{Logging, LoggingMarkers, MetricEmitter, TransactionId}
 import org.apache.openwhisk.core.connector.MessageFeed
 import org.apache.openwhisk.core.entity.ExecManifest.ReactivePrewarmingConfig
@@ -81,6 +81,10 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
   // Key is ColdStartKey, value is the number of cold Start in minute
   var coldStartCount = immutable.Map.empty[ColdStartKey, Int]
 
+  // 添加预加载相关的状态跟踪
+  private var actionTimers = immutable.Map.empty[ExecutableWhiskAction, Cancellable]
+  private val preloadTimeout = 2.minutes
+
   adjustPrewarmedContainer(true, false)
 
   // check periodically, adjust prewarmed container(delete if unused for some time and create some increment containers)
@@ -113,6 +117,10 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
       akka.event.Logging.InfoLevel)
   }
 
+  def isHealthTestAction(action: ExecutableWhiskAction): Boolean = {
+    action.name.name.contains("invokerHealthTest")
+  }
+
   def receive: Receive = {
     // A job to run on a container
     //
@@ -122,6 +130,19 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
     case r: Run =>
       // Check if the message is resent from the buffer. Only the first message on the buffer can be resent.
       val isResentFromBuffer = runBuffer.nonEmpty && runBuffer.dequeueOption.exists(_._1.msg == r.msg)
+
+      // 在成功处理Run消息后启动预加载定时器
+      val action = r.action
+      
+      // 只有非健康检查action才需要预加载
+      if (!isHealthTestAction(action)) {
+        actionTimers.get(action).foreach(_.cancel()) // 取消已存在的定时器
+        
+        val timer = context.system.scheduler.scheduleOnce(preloadTimeout) {
+          self ! PreloadContainer(r)
+        }
+        actionTimers = actionTimers + (action -> timer)
+      }
 
       // Only process request, if there are no other requests waiting for free slots, or if the current request is the
       // next request to process
@@ -308,6 +329,17 @@ class ContainerPool(childFactory: ActorRefFactory => ActorRef,
 
     case AdjustPrewarmedContainer =>
       adjustPrewarmedContainer(false, true)
+
+    case PreloadContainer(job) =>
+      val action = job.action
+      val kind = action.exec.kind
+      val memory = action.limits.memory.megabytes.MB
+      
+      if (hasPoolSpaceFor(busyPool ++ freePool ++ prewarmedPool, prewarmStartingPool, memory)) {
+        val container = createContainer(memory)
+        container._1 ! PreloadCode(job)
+      }
+
   }
 
   /** Resend next item in the buffer, or trigger next item in the feed, if no items in the buffer. */
@@ -710,3 +742,7 @@ case class PrewarmingConfig(initialCount: Int,
                             exec: CodeExec[_],
                             memoryLimit: ByteSize,
                             reactive: Option[ReactivePrewarmingConfig] = None)
+
+// 新增消息类型
+case class PreloadContainer(job: Run)
+case class PreloadCode(job: Run)

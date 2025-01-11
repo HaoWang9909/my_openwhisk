@@ -73,6 +73,7 @@ case object Running extends ContainerState
 case object Ready extends ContainerState
 case object Removing extends ContainerState
 case object PauseGraceReached
+case object PreloadPending extends ContainerState
 
 // Data
 /** Base data type */
@@ -206,6 +207,7 @@ case object RescheduleJob // job is sent back to parent and could not be process
 case class PreWarmCompleted(data: PreWarmedData)
 case class InitCompleted(data: WarmedData)
 case object RunCompleted
+case object PreloadCompleted
 
 /**
  * A proxy that wraps a Container. It is used to keep track of the lifecycle
@@ -353,6 +355,26 @@ class ContainerProxy(factory: (TransactionId,
         .pipeTo(self)
 
       goto(Running)
+
+    case Event(msg: PreloadCode, _) =>
+      implicit val transid = TransactionId.invokerWarmup
+      
+      val container = factory(
+        transid,
+        ContainerProxy.containerName(instance, msg.job.msg.user.namespace.name.asString, msg.job.action.name.asString),
+        msg.job.action.exec.image,
+        msg.job.action.exec.pull,
+        msg.job.action.limits.memory.megabytes.MB,
+        poolConfig.cpuShare(msg.job.action.limits.memory.megabytes.MB),
+        poolConfig.cpuLimit(msg.job.action.limits.memory.megabytes.MB),
+        Some(msg.job.action))
+        
+      container
+        .flatMap(container => initializePreload(container, msg.job.action))
+        .map(_ => PreloadCompleted)
+        .pipeTo(self)
+
+      goto(PreloadPending)
   }
 
   when(Starting) {
@@ -420,11 +442,16 @@ class ContainerProxy(factory: (TransactionId,
     case Event(RunCompleted, data: WarmedData) =>
       activeCount -= 1
       val newData = data.withoutResumeRun()
-      //if there are items in runbuffer, process them if there is capacity, and stay; otherwise if we have any pending activations, also stay
-      if (requestWork(data) || activeCount > 0) {
-        stay using newData
+      // 如果是健康检查action,则立即销毁容器
+      if (isHealthTestAction(data.action)) {
+        destroyContainer(newData, false)
       } else {
-        goto(Ready) using newData
+        //if there are items in runbuffer, process them if there is capacity, and stay; otherwise if we have any pending activations, also stay
+        if (requestWork(data) || activeCount > 0) {
+          stay using newData
+        } else {
+          goto(Ready) using newData
+        }
       }
     case Event(job: Run, data: WarmedData)
         if activeCount >= data.action.limits.concurrency.maxConcurrent && !rescheduleJob => //if we are over concurrency limit, and not a failure on resume
@@ -515,6 +542,14 @@ class ContainerProxy(factory: (TransactionId,
 
       goto(Running) using newData
     
+    case Event(RunCompleted, data: WarmedData) =>
+      // 如果是健康检查action,则立即销毁容器
+      if (isHealthTestAction(data.action)) {
+        destroyContainer(data, false)
+      } else {
+        stay
+      }
+    
     case Event(PauseGraceReached, data: WarmedData) =>
       logging.info(this, s"pauseGrace is reached, but we skip pausing container. We remain in Ready until unusedTimeout.")
       stay
@@ -555,6 +590,14 @@ class ContainerProxy(factory: (TransactionId,
       } else {
         stay using newData
       }
+  }
+
+  when(PreloadPending) {
+    case Event(completed: InitCompleted, _) =>
+      goto(Ready) using completed.data
+      
+    case Event(_: FailureMessage, _) =>
+      stop()
   }
 
   // Unstash all messages stashed while in intermediate state
@@ -931,6 +974,63 @@ class ContainerProxy(factory: (TransactionId,
     logging.warn(
       this,
       s"Activation ${act.activationId} at container ${stateData.getContainer} (with $activeCount still active) returned a $errorTypeMessage: $truncatedResult")
+  }
+
+  private def initializePreload(container: Container, action: ExecutableWhiskAction)(
+    implicit tid: TransactionId): Future[_] = {
+    
+    val env = Map(
+      "namespace" -> action.namespace.asString.toJson,
+      "action_name" -> action.name.asString.toJson,
+      "action_version" -> action.version.toJson)
+
+    val authEnvironment = {
+      if (action.annotations.isTruthy(Annotations.ProvideApiKeyAnnotationName, valueForNonExistent = true)) {
+        Map.empty
+      } else Map.empty
+    }
+
+    val initialize = stateData match {
+      case data: WarmedData =>
+        Future.successful(None)
+      case _ =>
+        val owEnv = (authEnvironment ++ env) map {
+          case (key, value) => "__OW_" + key.toUpperCase -> value
+        }
+
+        container.initialize(
+          action.containerInitializer(owEnv),
+          action.limits.timeout.duration,
+          action.limits.concurrency.maxConcurrent,
+          Some(action.toWhiskAction))
+          .map(Some(_))
+    }
+    
+    initialize.flatMap { initInterval => 
+      if (initInterval.isDefined) {
+        val warmedData = WarmedData(
+          container,
+          EntityName(action.namespace.namespace),
+          action,
+          Instant.now,
+          activeActivationCount = 0)
+        
+        // 通知父 actor 容器已准备就绪
+        context.parent ! NeedWork(warmedData)
+        
+        // 转换到 Ready 状态
+        self ! InitCompleted(warmedData)
+        
+        Future.successful(None)
+      } else {
+        logging.error(this, s"initialize ${container} for preload ${action} failed!")
+        Future.failed(new Exception())
+      }
+    }
+  }
+
+  def isHealthTestAction(action: ExecutableWhiskAction): Boolean = {
+    action.name.name.contains("invokerHealthTest")
   }
 }
 
