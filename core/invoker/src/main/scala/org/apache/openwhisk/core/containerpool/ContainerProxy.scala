@@ -71,9 +71,8 @@ case object Starting extends ContainerState
 case object Started extends ContainerState
 case object Running extends ContainerState
 case object Ready extends ContainerState
-case object Pausing extends ContainerState
-case object Paused extends ContainerState
 case object Removing extends ContainerState
+case object PauseGraceReached
 
 // Data
 /** Base data type */
@@ -271,7 +270,7 @@ class ContainerProxy(factory: (TransactionId,
   var runBuffer = immutable.Queue.empty[Run] //does not retain order, but does manage jobs that would have pushed past action concurrency limit
   //track buffer processing state to avoid extra transitions near end of buffer - this provides a pseudo-state between Running and Ready
   var bufferProcessing = false
-
+  var skipPausingSchedule: Option[Cancellable] = None
   //keep a separate count to avoid confusion with ContainerState.activeActivationCount that is tracked/modified only in ContainerPool
   var activeCount = 0;
   var healthPingActor: Option[ActorRef] = None //setup after prewarm starts
@@ -505,7 +504,7 @@ class ContainerProxy(factory: (TransactionId,
     case _ => delay
   }
 
-  when(Ready, stateTimeout = pauseGrace) {
+  when(Ready, stateTimeout = unusedTimeout) {
     case Event(job: Run, data: WarmedData) =>
       implicit val transid = job.msg.transid
       activeCount += 1
@@ -515,48 +514,18 @@ class ContainerProxy(factory: (TransactionId,
         .pipeTo(self)
 
       goto(Running) using newData
+    
+    case Event(PauseGraceReached, data: WarmedData) =>
+      logging.info(this, s"pauseGrace is reached, but we skip pausing container. We remain in Ready until unusedTimeout.")
+      stay
 
-    // pause grace timed out
     case Event(StateTimeout, data: WarmedData) =>
-      data.container.suspend()(TransactionId.invokerNanny).map(_ => ContainerPaused).pipeTo(self)
-      goto(Pausing)
+      destroyContainer(data, replacePrewarm = true)
 
     case Event(Remove, data: WarmedData) => destroyContainer(data, true)
 
     // warm container failed
     case Event(_: FailureMessage, data: WarmedData) =>
-      destroyContainer(data, true)
-  }
-
-  when(Pausing) {
-    case Event(ContainerPaused, data: WarmedData)   => goto(Paused)
-    case Event(_: FailureMessage, data: WarmedData) => destroyContainer(data, true)
-    case _                                          => delay
-  }
-
-  when(Paused, stateTimeout = unusedTimeout) {
-    case Event(job: Run, data: WarmedData) =>
-      implicit val transid = job.msg.transid
-      activeCount += 1
-      val newData = data.withResumeRun(job)
-      data.container
-        .resume()
-        .andThen {
-          // Sending the message to self on a failure will cause the message
-          // to ultimately be sent back to the parent (which will retry it)
-          // when container removal is done.
-          case Failure(_) =>
-            rescheduleJob = true
-            self ! job
-        }
-        .flatMap(_ => initializeAndRun(data.container, job, true))
-        .map(_ => RunCompleted)
-        .pipeTo(self)
-      goto(Running) using newData
-
-    // container is reclaimed by the pool or it has become too old
-    case Event(StateTimeout | Remove, data: WarmedData) =>
-      rescheduleJob = true // to suppress sending message to the pool and not double count
       destroyContainer(data, true)
   }
 
@@ -604,9 +573,12 @@ class ContainerProxy(factory: (TransactionId,
         disableHealthPing()
       }
     case _ -> Ready =>
-      unstashAll()
-    case _ -> Paused =>
-      unstashAll()
+      skipPausingSchedule = Some(
+      context.system.scheduler.scheduleOnce(pauseGrace, self, PauseGraceReached)(context.dispatcher, self)
+      )
+    case Ready -> _ =>
+      skipPausingSchedule.foreach(_.cancel())
+      skipPausingSchedule = None
     case _ -> Removing =>
       unstashAll()
   }
@@ -681,16 +653,12 @@ class ContainerProxy(factory: (TransactionId,
       Future.successful(())
     }
 
-    val unpause = stateName match {
-      case Paused => container.resume()(TransactionId.invokerNanny)
-      case _      => Future.successful(())
-    }
-
-    unpause
-      .flatMap(_ => container.destroy()(TransactionId.invokerNanny))
+    container
+      .destroy()(TransactionId.invokerNanny)
       .flatMap(_ => abortProcess)
       .map(_ => ContainerRemoved(replacePrewarm))
       .pipeTo(self)
+
     if (stateName != Removing) {
       goto(Removing) using newData
     } else {

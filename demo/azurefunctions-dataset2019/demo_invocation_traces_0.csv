@@ -5,9 +5,6 @@ is,queue,1
 tn,queue,1
 oi,queue,0
 dv,timer,0
-gb,queue,1
-gm,queue,1
-gp,http,1
 ir,timer,0
 sa,http,0
 fc,http,0
