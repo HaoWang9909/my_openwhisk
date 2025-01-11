@@ -277,6 +277,7 @@ class ContainerProxy(factory: (TransactionId,
   var activeCount = 0;
   var healthPingActor: Option[ActorRef] = None //setup after prewarm starts
   val tcp: ActorRef = testTcp.getOrElse(IO(Tcp)) //allows to testing interaction with Tcp extension
+  private var resourceMonitor: Option[ActorRef] = None
 
   startWith(Uninitialized, NoData())
 
@@ -380,6 +381,14 @@ class ContainerProxy(factory: (TransactionId,
   when(Starting) {
     // container was successfully obtained
     case Event(completed: PreWarmCompleted, _) =>
+      val containerId = completed.data.container.containerId.asString
+      resourceMonitor = Some(context.actorOf(
+        ContainerResourceMonitor.props(
+          containerId,
+          completed.data.container,
+          completed.data.memoryLimit
+        )
+      ))
       context.parent ! NeedWork(completed.data)
       goto(Started) using completed.data
 
@@ -683,6 +692,9 @@ class ContainerProxy(factory: (TransactionId,
                        replacePrewarm: Boolean,
                        abort: Boolean = false,
                        abortResponse: Option[ActivationResponse] = None) = {
+    resourceMonitor.foreach(_ ! ContainerResourceMonitor.StopMonitoring)
+    resourceMonitor = None
+    
     val container = newData.container
     if (!rescheduleJob) {
       context.parent ! ContainerRemoved(replacePrewarm)
