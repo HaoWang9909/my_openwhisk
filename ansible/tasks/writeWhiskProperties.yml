@@ -28,12 +28,12 @@
   stat: path="{{ openwhisk_home }}/tests/src/test/resources/application.conf.j2"
   register: application
 
-- name: write test's application conf overrides
-  tags: application
-  template:
-    src: "{{ openwhisk_home }}/tests/src/test/resources/application.conf.j2"
-    dest: "{{ openwhisk_home }}/tests/src/test/resources/application.conf"
-  when: application.stat.exists
+# - name: write test's application conf overrides
+#   tags: application
+#   template:
+#     src: "{{ openwhisk_home }}/tests/src/test/resources/application.conf.j2"
+#     dest: "{{ openwhisk_home }}/tests/src/test/resources/application.conf"
+#   when: application.stat.exists
 
 - name: write whisk.conf template for wskadmin to openwhisk_home
   template:

@@ -500,7 +500,7 @@ durationChecker:
     spi: "{{ duration_checker_spi | default('') }}"
     timeWindow: "{{ duration_checker_time_window | default('1 d') }}"
 
-enable_scheduler: "{{ scheduler_enable | default(true) }}"
+enable_scheduler: false
 
 scheduler:
   protocol: "{{ scheduler_protocol | default('http') }}"
