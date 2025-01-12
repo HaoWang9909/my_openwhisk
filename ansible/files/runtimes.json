@@ -15,11 +15,11 @@
     "runtimes": {
         "nodejs": [
             {
-                "kind": "nodejs:18",
+                "kind": "nodejs:20",
                 "default": false,
                 "image": {
                     "prefix": "openwhisk",
-                    "name": "action-nodejs-v18",
+                    "name": "action-nodejs-v20",
                     "tag": "nightly"
                 },
                 "deprecated": false,
@@ -29,11 +29,11 @@
                 }
             },
             {
-                "kind": "nodejs:20",
+                "kind": "nodejs:18",
                 "default": true,
                 "image": {
                     "prefix": "openwhisk",
-                    "name": "action-nodejs-v20",
+                    "name": "action-nodejs-v18",
                     "tag": "nightly"
                 },
                 "deprecated": false,
@@ -44,7 +44,7 @@
                 "stemCells": [
                     {
                         "initialCount": 2,
-                        "memory": "256 MB",
+                        "memory": "512 MB",
                         "reactive": {
                             "minCount": 1,
                             "maxCount": 4,
