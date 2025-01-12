@@ -1,0 +1,26 @@
+[
+    {
+        "name": "EndExperiment",
+        "activationId": "d65d73e73b594ec49d73e73b59bec427",
+        "duration": 2,
+        "initTime": 0
+    },
+    {
+        "name": "EndExperiment",
+        "activationId": "15bfbbe3ed304510bfbbe3ed309510da",
+        "duration": 175,
+        "initTime": 173
+    },
+    {
+        "name": "tn",
+        "activationId": "3cfb500980ee4d79bb500980eedd790c",
+        "duration": 1060,
+        "initTime": 565
+    },
+    {
+        "name": "is",
+        "activationId": "4c4b41cd3cec4a078b41cd3cec6a077a",
+        "duration": 880,
+        "initTime": 706
+    }
+]
