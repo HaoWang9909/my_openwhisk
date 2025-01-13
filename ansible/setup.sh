@@ -94,15 +94,15 @@ sudo ansible-playbook -i environments/$ENVIRONMENT wipe.yml
 check_success
 progress_bar 10
 
-log_action "Running elasticsearch.yml"
-sudo ansible-playbook -i environments/$ENVIRONMENT elasticsearch.yml
-check_success
-progress_bar 10
+# log_action "Running elasticsearch.yml"
+# sudo ansible-playbook -i environments/$ENVIRONMENT elasticsearch.yml
+# check_success
+# progress_bar 10
 
 log_action "Running openwhisk.yml"
 sudo ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml
 check_success
-progress_bar 15
+progress_bar 25
 
 log_action "Running postdeploy.yml"
 sudo ansible-playbook -i environments/$ENVIRONMENT postdeploy.yml

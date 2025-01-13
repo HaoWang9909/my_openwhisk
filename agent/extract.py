@@ -17,7 +17,7 @@ query_payload = {
             }
         }
     ],
-    "size": 4  # Number of records to retrieve
+    "size": 4 # Number of records to retrieve
 }
 
 # Send Elasticsearch query
