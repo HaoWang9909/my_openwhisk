@@ -1,67 +1,49 @@
-import requests
+import couchdb
 import json
 import csv
 
-# Elasticsearch URL
-ELASTICSEARCH_URL = "http://localhost:9200/openwhisk-guest/_search"
+# 连接到 CouchDB
+couch_client = couchdb.Server("http://admin:admin@localhost:5984")
+couch_activations = couch_client["whisk_local_activations"]
 
-# Query payload
-query_payload = {
-    "query": {
-        "match_all": {}
-    },
-    "sort": [
-        {
-            "start": {
-                "order": "desc"
-            }
-        }
-    ],
-    "size": 4 # Number of records to retrieve
-}
-
-# Send Elasticsearch query
-response = requests.get(
-    ELASTICSEARCH_URL,
-    headers={"Content-Type": "application/json"},
-    data=json.dumps(query_payload)
-)
-
-if response.status_code == 200:
-    # Parse JSON data
-    data = response.json()
-    activations = []
-
-    # Extract activation records
-    for hit in data["hits"]["hits"]:
-        source = hit["_source"]
-        annotations = source.get("annotations", {})
-
-        # Extract initTime (default to 0 if not available)
-        if isinstance(annotations, dict):
-            init_time = annotations.get("initTime", 0)
-        else:
-            init_time = 0
+# 获取所有以 "guest/" 开头的文档
+activations = []
+for doc_id in couch_activations:
+    if doc_id.startswith("guest/"):
+        doc = couch_activations[doc_id]
+        
+        # 提取 initTime
+        init_time = 0
+        for annotation in doc.get("annotations", []):
+            if annotation.get("key") == "initTime":
+                init_time = annotation.get("value", 0)
+                break
 
         activation = {
-            "name": source.get("name", "Unknown"),
-            "activationId": source.get("activationId", "Unknown"),
-            "duration": source.get("duration", "Unknown"),
-            "initTime": init_time
+            "name": doc.get("name", "Unknown"),
+            "activationId": doc.get("activationId", "Unknown"),
+            "duration": doc.get("duration", "Unknown"),
+            "initTime": init_time,
+            "start": doc.get("start", 0)
         }
         activations.append(activation)
 
-    # Save to JSON file
-    with open("activations_filtered.json", "w", encoding="utf-8") as jsonfile:
-        json.dump(activations, jsonfile, indent=4, ensure_ascii=False)
+# 按时间排序并获取最新的4条记录
+activations.sort(key=lambda x: x["start"], reverse=True)
+activations = activations[:4]
 
-    # Save to CSV file
-    with open("activations_filtered.csv", "w", newline="", encoding="utf-8") as csvfile:
-        fieldnames = ["name", "activationId", "duration", "initTime"]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(activations)
+# 移除 start 字段
+for activation in activations:
+    del activation["start"]
 
-    print("Activation records have been saved to activations_filtered.json and activations_filtered.csv")
-else:
-    print(f"Query failed with status code: {response.status_code}, error: {response.text}")
+# 保存结果
+with open("activations_filtered.json", "w", encoding="utf-8") as jsonfile:
+    json.dump(activations, jsonfile, indent=4, ensure_ascii=False)
+
+with open("activations_filtered.csv", "w", newline="", encoding="utf-8") as csvfile:
+    fieldnames = ["name", "activationId", "duration", "initTime"]
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(activations)
+
+print("Activation records have been saved to activations_filtered.json and activations_filtered.csv")
