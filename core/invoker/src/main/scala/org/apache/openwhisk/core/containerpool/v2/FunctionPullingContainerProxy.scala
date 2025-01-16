@@ -47,6 +47,7 @@ import org.apache.openwhisk.core.entity.{ExecutableWhiskAction, ActivationRespon
 import org.apache.openwhisk.core.etcd.EtcdKV.ContainerKeys
 import org.apache.openwhisk.core.invoker.Invoker.LogsCollector
 import org.apache.openwhisk.core.invoker.NamespaceBlacklist
+import org.apache.openwhisk.core.scheduler.SchedulerEndpoints
 import org.apache.openwhisk.core.service.{RegisterData, UnregisterData}
 import org.apache.openwhisk.grpc.RescheduleResponse
 import org.apache.openwhisk.http.Messages
@@ -75,15 +76,15 @@ case class Start(exec: CodeExec[_], memoryLimit: ByteSize, ttl: Option[FiniteDur
 
 // Event sent by the actor
 case class ContainerCreationFailed(throwable: Throwable)
-//case class ContainerIsPaused(data: WarmData)
+case class ContainerIsPaused(data: WarmData)
 case class ClientCreationFailed(throwable: Throwable,
                                 container: Container,
                                 invocationNamespace: String,
                                 action: ExecutableWhiskAction)
 case class ReadyToWork(data: PreWarmData)
 case class Initialized(data: InitializedData)
-//case class Resumed(data: WarmData)
-//case class ResumeFailed(data: WarmData)
+case class Resumed(data: WarmData)
+case class ResumeFailed(data: WarmData)
 case class RecreateClient(action: ExecutableWhiskAction)
 case object PingCache
 case class DetermineKeepContainer(attempt: Int)
@@ -97,6 +98,8 @@ case object ContainerCreated extends ProxyState
 case object CreatingClient extends ProxyState
 case object ClientCreated extends ProxyState
 case object Running extends ProxyState
+case object Pausing extends ProxyState
+case object Paused extends ProxyState
 case object Removing extends ProxyState
 case object Rescheduling extends ProxyState
 
@@ -213,7 +216,7 @@ class FunctionPullingContainerProxy(
   implicit val ec = actorSystem.dispatcher
 
   private val UnusedTimeoutName = "UnusedTimeout"
-  private val unusedTimeout = timeoutConfig.idleContainer
+  private val unusedTimeout = timeoutConfig.pauseGrace
   private val IdleTimeoutName = "PausingTimeout"
   private val idleTimeout = timeoutConfig.idleContainer
   private val KeepingTimeoutName = "KeepingTimeout"
@@ -227,12 +230,6 @@ class FunctionPullingContainerProxy(
   val tcp: ActorRef = testTcp.getOrElse(IO(Tcp)) //allows to testing interaction with Tcp extension
 
   val runningActivations = new java.util.concurrent.ConcurrentHashMap[String, Boolean]
-
-  // 修改 Redis 客户端的创建
-  private val redisClient = context.actorOf(RedisClient.props(logging))
-  
-  // 添加容器监控Actor引用
-  private var containerMonitor: Option[ActorRef] = None
 
   when(Uninitialized) {
     // pre warm a container (creates a stem cell container)
@@ -285,56 +282,6 @@ class FunctionPullingContainerProxy(
           }
         }
         .pipeTo(self)
-
-      goto(CreatingClient)
-
-    // handle prewarm initialization without running
-    case Event(job: InitializeButNotRun, _) =>
-      implicit val transid = TransactionId.invokerWarmup
-      logging.info(this, s"Initializing container for ${job.action} without running")
-      
-      // Get the action from the entity store
-      val actionId = job.action.toDocId.asDocInfo(job.revision)  
-      get(entityStore, actionId.id, actionId.rev, true, false).flatMap { action =>
-        action.toExecutableWhiskAction match {
-          case Some(executable) =>
-            factory(
-              transid,
-              containerName(instance, job.invocationNamespace, job.action.name.asString),
-              executable.exec.image,
-              executable.exec.pull,
-              job.memoryLimit,
-              poolConfig.cpuShare(job.memoryLimit),
-              poolConfig.cpuLimit(job.memoryLimit),
-              None)
-              .andThen {
-                case Failure(t) =>
-                  context.parent ! ContainerCreationFailed(t)
-              }
-              .map { container =>
-                logging.debug(this, s"a container ${container.containerId} is created for prewarm init ${job.action}")
-                // create a client
-                Try(
-                  clientProxyFactory(
-                    context,
-                    job.invocationNamespace,
-                    job.action,
-                    job.revision,
-                    job.schedulerHost,
-                    job.rpcPort,
-                    container.containerId)) match {
-                  case Success(clientProxy) =>
-                    InitializedData(container, job.invocationNamespace, executable, clientProxy)
-                  case Failure(t) =>
-                    logging.error(this, s"failed to create activation client caused by: $t")
-                    ClientCreationFailed(t, container, job.invocationNamespace, executable)
-                }
-              }
-              .pipeTo(self)
-          case None =>
-            Future.failed(new IllegalStateException("non-executable action reached the invoker"))
-        }
-      }
 
       goto(CreatingClient)
 
@@ -432,32 +379,11 @@ class FunctionPullingContainerProxy(
   when(ClientCreated) {
     // 1. request activation message to client
     case Event(initializedData: InitializedData, _) =>
-      // 启动容器监控
-      containerMonitor = Some(context.actorOf(
-        ContainerMonitor.props(
-          initializedData.container,
-          redisClient,
-          instance,
-          logging)))
-          
-      // Check if this is a prewarm initialization
-      if (initializedData.clientProxy.path.name.contains("prewarm")) {
-        // For prewarm initialization, just initialize the container without running
-        logging.info(this, s"Performing prewarm initialization for ${initializedData.action}")
-        initializeOnly(initializedData.container, initializedData.clientProxy, initializedData.action)(TransactionId.invokerWarmup)
-          .map { warmData =>
-            InitCodeCompleted(warmData)
-          }
-          .pipeTo(self)
-        stay() using initializedData
-      } else {
-        // Normal initialization with activation
-        context.parent ! Initialized(initializedData)
-        initializedData.clientProxy ! RequestActivation()
-        startTimerWithFixedDelay(PingCacheName, PingCache, pingCacheInterval)
-        startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
-        stay() using initializedData
-      }
+      context.parent ! Initialized(initializedData)
+      initializedData.clientProxy ! RequestActivation()
+      startTimerWithFixedDelay(PingCacheName, PingCache, pingCacheInterval)
+      startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
+      stay() using initializedData
 
     // 2. read executable action data from db
     case Event(job: ActivationMessage, data: InitializedData) =>
@@ -590,7 +516,6 @@ class FunctionPullingContainerProxy(
     // Run was successful.
     // 1. request activation message to client
     case Event(activationResult: RunActivationCompleted, data: WarmData) =>
-      logging.info(this, s"Container ${data.container.containerId} completed activation and staying warm during keep-alive period - skipping Paused state")
       // create timeout
       startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
       data.clientProxy ! RequestActivation(activationResult.duration)
@@ -598,7 +523,6 @@ class FunctionPullingContainerProxy(
 
     // 2. read executable action data from db
     case Event(job: ActivationMessage, data: WarmData) =>
-      logging.info(this, s"Container ${data.container.containerId} received new activation ${job.activationId} while warm - skipping Paused state")
       timedOut = false
       cancelTimer(UnusedTimeoutName)
       handleActivationMessage(job, data.action)
@@ -607,7 +531,6 @@ class FunctionPullingContainerProxy(
 
     // 3. request run command to container
     case Event(job: RunActivation, data: WarmData) =>
-      logging.info(this, s"Container ${data.container.containerId} executing activation ${job.msg.activationId} while warm - skipping Paused state")
       logging.debug(this, s"received RunActivation ${job.msg.activationId} for ${job.action} in $stateName")
       implicit val transid = job.msg.transid
 
@@ -621,16 +544,21 @@ class FunctionPullingContainerProxy(
     case Event(RetryRequestActivation, data: WarmData) =>
       // if this Container is marked with time out, do not retry
       if (timedOut) {
-        cleanUp(
-          data.container,
-          data.invocationNamespace,
-          data.action.fullyQualifiedName(withVersion = true),
-          data.action.rev,
-          Some(data.clientProxy))
+        data.container.suspend()(TransactionId.invokerNanny).map(_ => ContainerPaused).pipeTo(self)
+        goto(Pausing)
       } else {
         data.clientProxy ! RequestActivation()
         stay()
       }
+
+    case Event(_: ResumeFailed, data: WarmData) =>
+      invokerHealthManager ! HealthMessage(state = false)
+      cleanUp(
+        data.container,
+        data.invocationNamespace,
+        data.action.fullyQualifiedName(withVersion = true),
+        data.action.rev,
+        Some(data.clientProxy))
 
     // ContainerHealthError should cause
     case Event(FailureMessage(e: ContainerHealthError), data: WarmData) =>
@@ -720,6 +648,126 @@ class FunctionPullingContainerProxy(
     case x: Event if x.event != PingCache => delay
   }
 
+  when(Pausing) {
+    case Event(ContainerPaused, data: WarmData) =>
+      dataManagementService ! RegisterData(
+        ContainerKeys.warmedContainers(
+          data.invocationNamespace,
+          data.action.fullyQualifiedName(false),
+          data.revision,
+          instance,
+          data.container.containerId),
+        "")
+      // remove existing key so MemoryQueue can be terminated when timeout
+      dataManagementService ! UnregisterData(
+        s"${ContainerKeys.existingContainers(data.invocationNamespace, data.action.fullyQualifiedName(true), data.action.rev, Some(instance), Some(data.container.containerId))}")
+      context.parent ! ContainerIsPaused(data)
+      goto(Paused)
+
+    case Event(_: FailureMessage, data: WarmData) =>
+      cleanUp(
+        data.container,
+        data.invocationNamespace,
+        data.action.fullyQualifiedName(false),
+        data.action.rev,
+        Some(data.clientProxy))
+
+    case x: Event if x.event != PingCache => delay
+  }
+
+  when(Paused) {
+    case Event(job: Initialize, data: WarmData) =>
+      implicit val transId = job.transId
+      val parent = context.parent
+      cancelTimer(IdleTimeoutName)
+      cancelTimer(KeepingTimeoutName)
+      cancelTimer(DetermineKeepContainer.toString)
+      data.container
+        .resume()
+        .map { _ =>
+          logging.info(this, s"Resumed container ${data.container.containerId}")
+          // put existing key again
+          dataManagementService ! RegisterData(
+            s"${ContainerKeys.existingContainers(data.invocationNamespace, data.action.fullyQualifiedName(true), data.action.rev, Some(instance), Some(data.container.containerId))}",
+            "")
+          parent ! Resumed(data)
+          // the new queue may locates on an different scheduler, so recreate the activation client when necessary
+          // since akka port will no be used, we can put any value except 0 here
+          data.clientProxy ! RequestActivation(
+            newScheduler = Some(SchedulerEndpoints(job.schedulerHost, job.rpcPort, 10)))
+          startSingleTimer(UnusedTimeoutName, StateTimeout, unusedTimeout)
+          timedOut = false
+        }
+        .recover {
+          case t: Throwable =>
+            logging.error(this, s"Failed to resume container ${data.container.containerId}, error: $t")
+            parent ! ResumeFailed(data)
+            self ! ResumeFailed(data)
+        }
+
+      // always clean data in etcd regardless of success and failure
+      dataManagementService ! UnregisterData(
+        ContainerKeys.warmedContainers(
+          data.invocationNamespace,
+          data.action.fullyQualifiedName(false),
+          data.revision,
+          instance,
+          data.container.containerId))
+      goto(Running)
+    case Event(StateTimeout, _: WarmData) =>
+      self ! DetermineKeepContainer(0)
+      stay
+    case Event(DetermineKeepContainer(attempt), data: WarmData) =>
+      getLiveContainerCount(data.invocationNamespace, data.action.fullyQualifiedName(false), data.revision)
+        .flatMap(count => {
+          getWarmedContainerLimit(data.invocationNamespace).map(warmedContainerInfo => {
+            logging.info(
+              this,
+              s"Live container count: $count, warmed container keeping count configuration: ${warmedContainerInfo._1} in namespace: ${data.invocationNamespace}")
+            if (count <= warmedContainerInfo._1) {
+              self ! Keep(warmedContainerInfo._2)
+            } else {
+              self ! Remove
+            }
+          })
+        })
+        .recover({
+          case t: Throwable =>
+            logging.error(
+              this,
+              s"Failed to determine whether to keep or remove container on pause timeout for ${data.container.containerId}, retrying. Caused by: $t")
+            if (attempt < 5) {
+              startSingleTimer(DetermineKeepContainer.toString, DetermineKeepContainer(attempt + 1), 500.milli)
+            } else {
+              self ! Remove
+            }
+        })
+      stay
+    case Event(Keep(warmedContainerKeepingTimeout), data: WarmData) =>
+      logging.info(
+        this,
+        s"This is the remaining container for ${data.action}. The container will stop after $warmedContainerKeepingTimeout.")
+      startSingleTimer(KeepingTimeoutName, Remove, warmedContainerKeepingTimeout)
+      stay
+    case Event(Remove | GracefulShutdown, data: WarmData) =>
+      cancelTimer(DetermineKeepContainer.toString)
+      dataManagementService ! UnregisterData(
+        ContainerKeys.warmedContainers(
+          data.invocationNamespace,
+          data.action.fullyQualifiedName(false),
+          data.revision,
+          instance,
+          data.container.containerId))
+      cleanUp(
+        data.container,
+        data.invocationNamespace,
+        data.action.fullyQualifiedName(false),
+        data.action.rev,
+        Some(data.clientProxy))
+
+    case x: Event if x.event != PingCache => delay
+  }
+
   when(Removing, unusedTimeout) {
     // only if ClientProxy is closed, ContainerProxy stops. So it is important for ClientProxy to send ClientClosed.
     case Event(ClientClosed, _) =>
@@ -778,6 +826,7 @@ class FunctionPullingContainerProxy(
         }
       }
       unstashAll()
+    case _ -> Paused   => startSingleTimer(IdleTimeoutName, StateTimeout, idleTimeout)
     case _ -> Removing => unstashAll()
   }
 
@@ -819,12 +868,17 @@ class FunctionPullingContainerProxy(
   }
 
   private def cleanUp(container: Container, clientProxy: Option[ActorRef], replacePrewarm: Boolean = true): State = {
-    // 停止监控
-    containerMonitor.foreach(_ ! ContainerMonitor.StopMonitoring)
-    containerMonitor = None
-    
     context.parent ! ContainerRemoved(replacePrewarm)
-    destroyContainer(container)
+    val unpause = stateName match {
+      case Paused => container.resume()(TransactionId.invokerNanny)
+      case _      => Future.successful(())
+    }
+    unpause.andThen {
+      case Success(_) => destroyContainer(container)
+      case Failure(t) =>
+        // docker may hang when try to remove a paused container, so we shouldn't remove it
+        logging.error(this, s"Failed to resume container ${container.containerId}, error: $t")
+    }
     clientProxy match {
       case Some(clientProxy) => clientProxy ! StopClientProxy
       case None              => self ! ClientClosed
@@ -975,47 +1029,7 @@ class FunctionPullingContainerProxy(
   }
 
   /**
-   * Initialize container without running activation
-   * 
-   * @param container the container to initialize
-   * @param clientProxy the client proxy actor
-   * @param action the action to initialize
-   * @param transid the transaction id
-   * @return a future completing after initialization
-   */
-  private def initializeOnly(
-    container: Container,
-    clientProxy: ActorRef,
-    action: ExecutableWhiskAction)(implicit tid: TransactionId): Future[WarmData] = {
-
-    val actionTimeout = action.limits.timeout.duration
-    
-    // Only initialize if we haven't yet warmed the container
-    val initialize = stateData match {
-      case _: WarmData =>
-        Future.successful(None)
-      case _ =>
-        val env = Map(
-          "namespace" -> action.namespace.toString.toJson,
-          "action_name" -> action.name.toString.toJson,
-          "action_version" -> action.version.toString.toJson)
-        
-        val owEnv = env map {
-          case (key, value) => "__OW_" + key.toUpperCase -> value
-        }
-
-        container
-          .initialize(action.containerInitializer(owEnv), actionTimeout, action.limits.concurrency.maxConcurrent)
-          .map(Some(_))
-    }
-
-    initialize.map { initInterval =>
-      // Create warm data after initialization
-      WarmData(container, action.namespace.toString, action, DocRevision.empty, Instant.now, clientProxy)
-    }
-  }
-
-  /** Runs the job, initialize first if necessary.
+   * Runs the job, initialize first if necessary.
    * Completes the job by:
    * 1. sending an activate ack,
    * 2. fetching the logs for the run,
